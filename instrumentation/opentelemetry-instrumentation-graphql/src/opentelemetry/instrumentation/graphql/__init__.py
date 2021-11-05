@@ -11,7 +11,6 @@ from opentelemetry.instrumentation.graphql.execute import _wrap_execute
 from opentelemetry.instrumentation.graphql.package import _instruments
 from opentelemetry.instrumentation.graphql.parse import _wrap_parse
 from opentelemetry.instrumentation.graphql.utils import (
-    get_operation,
     add_span_source,
     Config,
 )

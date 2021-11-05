@@ -30,22 +30,6 @@ ProcessedArgs = namedtuple(
 Config = namedtuple("Config", ("allow_values", "merge_items", "depth"))
 
 
-def get_operation(
-    processed_args: ProcessedArgs,
-) -> Optional[graphql.OperationDefinitionNode]:
-    operation = None
-    operation_name = processed_args.operation_name
-    for definition in processed_args.document.definitions:
-        if isinstance(definition, graphql.OperationDefinitionNode):
-            if operation_name is None:
-                if operation:
-                    return None
-                operation = definition
-            elif definition.name and definition.name.value == operation_name:
-                operation = definition
-    return operation
-
-
 def resolver_span(
     tracer: Tracer,
     config: Config,
@@ -213,7 +197,10 @@ def _get_source_from_loc(
 
 
 def create_execute_span(tracer, config: Config, processed_args: ProcessedArgs):
-    operation = get_operation(processed_args)
+    operation = get_operation(
+        processed_args.document,
+        processed_args.operation_name,
+    )
     span = tracer.start_span(name=SpanName.EXECUTE)
     if operation:
         name = operation.operation.name
