@@ -43,7 +43,7 @@ VERSION_FILENAME = os.path.join(
     "src",
     "opentelemetry",
     "instrumentation",
-    "elasticsearch",
+    "graphql",
     "version.py",
 )
 with open(VERSION_FILENAME, encoding="utf-8") as f:
@@ -54,7 +54,7 @@ PACKAGE_FILENAME = os.path.join(
     "src",
     "opentelemetry",
     "instrumentation",
-    "elasticsearch",
+    "graphql",
     "package.py",
 )
 with open(PACKAGE_FILENAME, encoding="utf-8") as f:
