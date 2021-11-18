@@ -56,11 +56,9 @@ def wrap_field_resolver(tracer, config: Config, resolver: Callable):
             if depth > config.depth >= 0:
                 field = get_parent_field(info.context, path)
             else:
-                new_field = create_field_if_not_exists(
+                field, should_end_span = create_field_if_not_exists(
                     tracer, config, info, path
                 )
-                field = new_field["field"]
-                should_end_span = new_field["span_added"]
 
             with trace.use_span(span=field.span, end_on_exit=should_end_span):
                 return wrapped(*args_, **kwargs)
@@ -72,7 +70,10 @@ def wrap_field_resolver(tracer, config: Config, resolver: Callable):
     return wrapped_field_resolver
 
 
-def wrap_fields(typ: graphql.GraphQLObjectType, tracer, config: Config):
+def wrap_fields(typ: graphql.GraphQLObjectType, tracer, config: Config) -> None:
+    """
+    Walks through the typ fields recursively, wrapping their resolvers
+    """
     if not typ or not typ.fields or getattr(typ, OTEL_PATCHED_ATTR, False):
         return
 
@@ -104,6 +105,12 @@ def _wrap_execute_args(
     execution_context_class: Optional[Type[graphql.ExecutionContext]] = None,
     is_awaitable: Optional[Callable[[Any], bool]] = None,
 ) -> ProcessedArgs:
+    """
+    Wraps `field_resolver` and walks the schema to wrap also the inner fields and
+    resolvers, returning a ProcessedArgs namedtuple with the args wrapped.
+
+    Beside `tracer` and `schema`, it takes the same args that graphql.execute
+    """
     if not context_value:
         context_value = {}
 

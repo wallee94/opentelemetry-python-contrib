@@ -1,5 +1,5 @@
 from collections import namedtuple
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Tuple
 
 import graphql
 from opentelemetry.trace import Span, Tracer, set_span_in_context
@@ -73,17 +73,26 @@ def add_field(context: Any, path: List[str], field: OTELGraphQLField) -> None:
 
 
 def get_field(context: Any, path: List[str]) -> Optional[OTELGraphQLField]:
+    """
+    If an OTELGraphQLField with an open span was already set in the context for
+    this path, return it
+    """
     otel_graphql_data = getattr(context, OTEL_GRAPHQL_DATA_ATTR)
     return otel_graphql_data.fields.get(".".join(path))
 
 
 def get_parent_field(context: Any, path: List[str]) -> OTELGraphQLField:
-    otel_graphql_data = getattr(context, OTEL_GRAPHQL_DATA_ATTR)
+    """
+    Search for any parent OTELGraphQLField in the path that has been stored in
+    the context. If none is found, a new OTELGraphQLField is returned with parent None
+    and the main execution span
+    """
     for i in range(len(path), -1, -1):
         field = get_field(context, path[:i])
         if field:
             return field
 
+    otel_graphql_data = getattr(context, OTEL_GRAPHQL_DATA_ATTR)
     return OTELGraphQLField(parent=None, span=otel_graphql_data.span)
 
 
@@ -92,9 +101,14 @@ def create_field_if_not_exists(
     config: Config,
     info: graphql.GraphQLResolveInfo,
     path: List[str],
-):
-    field = get_field(info.context, path)
+) -> Tuple[OTELGraphQLField, bool]:
+    """
+    A convenience method for looking up an object with the given path.
+    Returns a tuple of (field, created), where field is the retrieved or created field
+    and created is a boolean specifying whether a new field was created.
+    """
     span_added = False
+    field = get_field(info.context, path)
     if not field:
         span_added = True
         parent = get_parent_field(info.context, path)
@@ -103,12 +117,16 @@ def create_field_if_not_exists(
 
         add_field(info.context, path, field)
 
-    return {"span_added": span_added, "field": field}
+    return field, span_added
 
 
 def path_to_list(
     merge_items: bool, path: graphql.pyutils.path.Path
 ) -> List[str]:
+    """
+    Converts a GraphQL path into a list. If `merge_items` is False, the same field in
+    a different element in a list are treated as diff fields with diff spans.
+    """
     flattened = []
     cur = path
     while cur:
@@ -124,7 +142,11 @@ def path_to_list(
 
 def get_operation(
     document: graphql.DocumentNode, operation_name: Optional[str] = None
-) -> Optional[graphql.DefinitionNode]:
+) -> Optional[graphql.OperationDefinitionNode]:
+    """
+    Returns the operation DefinitionNode in `document`. If `operation_name` is
+    provided, the operation's name must match
+    """
     if not document or not document.definitions:
         return None
 
@@ -208,6 +230,7 @@ def create_execute_span(tracer, config: Config, processed_args: ProcessedArgs):
             span.set_attribute(AttributeName.OPERATION, str(name))
 
     else:
+        # Invalid operation name
         name = ""
         if processed_args.operation_name:
             name = f'"{processed_args.operation_name}" '
