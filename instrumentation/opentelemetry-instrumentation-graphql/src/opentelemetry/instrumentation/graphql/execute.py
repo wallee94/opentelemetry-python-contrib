@@ -10,6 +10,8 @@ from opentelemetry.instrumentation.graphql.context import (
     OTELGraphQLData,
 )
 from opentelemetry.instrumentation.graphql.utils import (
+    _hasattr,
+    _setattr,
     Config,
     path_to_list,
     create_field_if_not_exists,
@@ -25,69 +27,24 @@ def _wrap_execute(tracer, config, response_hook=None):
         processed_args = _wrap_execute_args(tracer, config, *args, **kwargs)
         span = create_execute_span(tracer, config, processed_args)
 
-        setattr(
+        _setattr(
             processed_args.context_value,
             OTEL_GRAPHQL_DATA_ATTR,
             OTELGraphQLData(
                 source=processed_args.document, span=span, fields={}
             ),
         )
-        with trace.use_span(span=span) as _span:
-            res = wrapped(**processed_args._asdict())
+        with trace.use_span(span=span, end_on_exit=True) as _span:
+            kwargs = processed_args._asdict()
+            kwargs.update(kwargs.pop("kwargs"))
+            args = kwargs.pop("args")
+            res = wrapped(*args, **kwargs)
             if callable(response_hook):
                 response_hook(span, res)
 
             return res
 
     return wrapper
-
-
-def wrap_field_resolver(tracer, config: Config, resolver: Callable):
-    @wrapt.decorator
-    def _wrap_field_resolver(wrapped, _, args, kwargs):
-        def _resolver(root: Any, info: graphql.GraphQLResolveInfo, *args_):
-            if not hasattr(info.context, OTEL_GRAPHQL_DATA_ATTR):
-                return wrapped(*args_, **kwargs)
-
-            path = path_to_list(config.merge_items, info.path)
-
-            depth = len(path)
-            should_end_span = False
-            if depth > config.depth >= 0:
-                field = get_parent_field(info.context, path)
-            else:
-                field, should_end_span = create_field_if_not_exists(
-                    tracer, config, info, path
-                )
-
-            with trace.use_span(span=field.span, end_on_exit=should_end_span):
-                return wrapped(*args_, **kwargs)
-
-        return _resolver(*args, **kwargs)
-
-    wrapped_field_resolver = _wrap_field_resolver(resolver)
-    setattr(wrapped_field_resolver, OTEL_PATCHED_ATTR, True)
-    return wrapped_field_resolver
-
-
-def wrap_fields(typ: graphql.GraphQLObjectType, tracer, config: Config) -> None:
-    """
-    Walks through the typ fields recursively, wrapping their resolvers
-    """
-    if not typ or not typ.fields or getattr(typ, OTEL_PATCHED_ATTR, False):
-        return
-
-    setattr(typ, OTEL_PATCHED_ATTR, True)
-    for field in typ.fields.values():
-        if field.resolve:
-            field.resolve = wrap_field_resolver(tracer, config, field.resolve)
-
-        if field.type:
-            unwrapped_type = field.type
-            while isinstance(unwrapped_type, graphql.GraphQLWrappingType):
-                unwrapped_type = field.type.of_type
-
-            wrap_fields(unwrapped_type, tracer, config)
 
 
 def _wrap_execute_args(
@@ -103,7 +60,8 @@ def _wrap_execute_args(
     type_resolver: Optional[graphql.GraphQLTypeResolver] = None,
     middleware: Optional[graphql.Middleware] = None,
     execution_context_class: Optional[Type[graphql.ExecutionContext]] = None,
-    is_awaitable: Optional[Callable[[Any], bool]] = None,
+    *args,
+    **kwargs,
 ) -> ProcessedArgs:
     """
     Wraps `field_resolver` and walks the schema to wrap also the inner fields and
@@ -125,12 +83,13 @@ def _wrap_execute_args(
         type_resolver,
         middleware,
         execution_context_class,
-        is_awaitable,
+        args,
+        kwargs
     )
-    if hasattr(context_value, OTEL_GRAPHQL_DATA_ATTR):
+    if _hasattr(context_value, OTEL_GRAPHQL_DATA_ATTR):
         return processed_args
 
-    if callable(field_resolver) and not hasattr(
+    if callable(field_resolver) and not _hasattr(
         field_resolver, OTEL_PATCHED_ATTR
     ):
         field_resolver = wrap_field_resolver(tracer, config, field_resolver)
@@ -141,3 +100,52 @@ def _wrap_execute_args(
 
     processed_args = processed_args._replace(field_resolver=field_resolver)
     return processed_args
+
+
+def wrap_fields(typ: graphql.GraphQLObjectType, tracer, config: Config) -> None:
+    """
+    Walks through the typ fields recursively, wrapping their resolvers
+    """
+    if not typ or not getattr(typ, "fields", False) or getattr(typ, OTEL_PATCHED_ATTR, False):
+        return
+
+    setattr(typ, OTEL_PATCHED_ATTR, True)
+    for field in typ.fields.values():
+        if field.resolve:
+            field.resolve = wrap_field_resolver(tracer, config, field.resolve)
+
+        if field.type:
+            unwrapped_type = field.type
+            while isinstance(unwrapped_type, graphql.GraphQLWrappingType):
+                unwrapped_type = field.type.of_type
+
+            wrap_fields(unwrapped_type, tracer, config)
+
+
+def wrap_field_resolver(tracer, config: Config, resolver: Callable):
+    @wrapt.decorator
+    def _wrap_field_resolver(wrapped, _, args, kwargs):
+        def _resolver(root: Any, info: graphql.GraphQLResolveInfo, **args_):
+            if not _hasattr(info.context, OTEL_GRAPHQL_DATA_ATTR):
+                return wrapped(root, info, **args_)
+
+            path = path_to_list(config.merge_items, info.path)
+
+            depth = len(path)
+            should_end_span = False
+            if config.depth is not None and depth > config.depth >= 0:
+                field = get_parent_field(info.context, path)
+            else:
+                field, should_end_span = create_field_if_not_exists(
+                    tracer, config, info, path
+                )
+
+            with trace.use_span(span=field.span, end_on_exit=should_end_span):
+                return wrapped(root, info, **args_)
+
+        return _resolver(*args, **kwargs)
+
+    wrapped_field_resolver = _wrap_field_resolver(resolver)
+    setattr(wrapped_field_resolver, OTEL_PATCHED_ATTR, True)
+    return wrapped_field_resolver
+

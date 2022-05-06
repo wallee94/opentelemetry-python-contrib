@@ -1,4 +1,5 @@
 from collections import namedtuple
+from collections.abc import MutableMapping, Mapping
 from typing import Optional, List, Any, Tuple
 
 import graphql
@@ -23,11 +24,32 @@ ProcessedArgs = namedtuple(
         "type_resolver",
         "middleware",
         "execution_context_class",
-        "is_awaitable",
+        "args",
+        "kwargs",
     ),
 )
 
 Config = namedtuple("Config", ("allow_values", "merge_items", "depth"))
+
+
+def _hasattr(obj, name):
+    if isinstance(obj, Mapping):
+        return name in obj
+    return hasattr(obj, name)
+
+
+def _setattr(obj, name, value):
+    if isinstance(obj, MutableMapping):
+        obj[name] = value
+    else:
+        setattr(obj, name, value)
+
+
+def _getattr(obj, name):
+    if isinstance(obj, MutableMapping):
+        return obj[name]
+    else:
+        getattr(obj, name)
 
 
 def resolver_span(
@@ -51,7 +73,7 @@ def resolver_span(
         },
     )
 
-    otel_graphql_data = getattr(info.context, OTEL_GRAPHQL_DATA_ATTR)
+    otel_graphql_data = _getattr(info.context, OTEL_GRAPHQL_DATA_ATTR)
     document = otel_graphql_data.source
     for field_node in info.field_nodes:
         if field_node.kind == "field":
@@ -68,7 +90,7 @@ def resolver_span(
 
 
 def add_field(context: Any, path: List[str], field: OTELGraphQLField) -> None:
-    otel_graphql_data = getattr(context, OTEL_GRAPHQL_DATA_ATTR)
+    otel_graphql_data = _getattr(context, OTEL_GRAPHQL_DATA_ATTR)
     otel_graphql_data.fields[".".join(path)] = field
 
 
@@ -77,7 +99,7 @@ def get_field(context: Any, path: List[str]) -> Optional[OTELGraphQLField]:
     If an OTELGraphQLField with an open span was already set in the context for
     this path, return it
     """
-    otel_graphql_data = getattr(context, OTEL_GRAPHQL_DATA_ATTR)
+    otel_graphql_data = _getattr(context, OTEL_GRAPHQL_DATA_ATTR)
     return otel_graphql_data.fields.get(".".join(path))
 
 
@@ -92,7 +114,7 @@ def get_parent_field(context: Any, path: List[str]) -> OTELGraphQLField:
         if field:
             return field
 
-    otel_graphql_data = getattr(context, OTEL_GRAPHQL_DATA_ATTR)
+    otel_graphql_data = _getattr(context, OTEL_GRAPHQL_DATA_ATTR)
     return OTELGraphQLField(parent=None, span=otel_graphql_data.span)
 
 
@@ -130,7 +152,7 @@ def path_to_list(
     flattened = []
     cur = path
     while cur:
-        key = path.key
+        key = cur.key
         if merge_items and isinstance(key, int):
             key = "*"
         flattened.append(str(key))
@@ -177,7 +199,7 @@ def _get_source_from_loc(
     start = start or loc.start
     end = end or loc.end
 
-    prev_line = -1
+    prev_line = 1
     nxt = loc.start_token.next
     kinds_to_remove = [
         graphql.TokenKind.FLOAT,
@@ -196,7 +218,7 @@ def _get_source_from_loc(
             continue
 
         space = ""
-        value = nxt.value or nxt.kind
+        value = nxt.value or nxt.kind.value
         if not allow_values and nxt.kind in kinds_to_remove:
             value = "****"
         if nxt.kind == graphql.TokenKind.STRING:

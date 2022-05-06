@@ -5,7 +5,7 @@ import graphql
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.trace import get_tracer
-from wrapt import wrap_function_wrapper as _wrap
+from wrapt import wrap_object, FunctionWrapper
 
 from opentelemetry.instrumentation.graphql.execute import _wrap_execute
 from opentelemetry.instrumentation.graphql.package import _instruments
@@ -25,6 +25,12 @@ class GraphQLInstrumentator(BaseInstrumentor):
     See `BaseInstrumentor`
     """
 
+    _enabled = True
+
+    @classmethod
+    def enabled(cls):
+        return cls._enabled
+
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
 
@@ -43,23 +49,39 @@ class GraphQLInstrumentator(BaseInstrumentor):
         tracer = get_tracer(__name__, __version__, tracer_provider)
         response_hook = kwargs.get("response_hook")
 
-        _wrap(
+        GraphQLInstrumentator._enabled = True
+        wrap_object(
             graphql,
-            "execute",
-            _wrap_execute(tracer, config, response_hook=response_hook),
+            "execute_sync",
+            FunctionWrapper,
+            args=(_wrap_execute(tracer, config, response_hook=response_hook),),
+            kwargs={"enabled": self.enabled}
         )
-        _wrap(
+        wrap_object(
+            graphql.execution,
+            "execute",
+            FunctionWrapper,
+            args=(_wrap_execute(tracer, config, response_hook=response_hook),),
+            kwargs={"enabled": self.enabled}
+        )
+        wrap_object(
             graphql,
             "parse",
-            _wrap_parse(tracer, allow_values),
+            FunctionWrapper,
+            args=(_wrap_parse(tracer, allow_values),),
+            kwargs={"enabled": self.enabled}
         )
-        _wrap(
+        wrap_object(
             graphql,
             "validate",
-            _wrap_validate(tracer),
+            FunctionWrapper,
+            args=(_wrap_validate(tracer),),
+            kwargs={"enabled": self.enabled}
         )
 
     def _uninstrument(self, **kwargs):
+        GraphQLInstrumentator._enabled = False
         unwrap(graphql, "parse")
         unwrap(graphql, "execute")
         unwrap(graphql, "validate")
+        unwrap(graphql, "execute_sync")
