@@ -1,4 +1,4 @@
-from typing import Optional, Callable, Any, Dict, Type
+from typing import Optional, Callable, Any, Dict
 
 import graphql
 import wrapt
@@ -18,7 +18,14 @@ from opentelemetry.instrumentation.graphql.utils import (
     get_parent_field,
     ProcessedArgs,
     create_execute_span,
+    is_v2,
 )
+
+try:
+    from graphql import is_wrapping_type
+except ImportError:
+    def is_wrapping_type(typ):
+        return isinstance(typ, (graphql.GraphQLNonNull, graphql.GraphQLList))
 
 
 def _wrap_execute(tracer, config, response_hook=None):
@@ -38,6 +45,10 @@ def _wrap_execute(tracer, config, response_hook=None):
             kwargs = processed_args._asdict()
             kwargs.update(kwargs.pop("kwargs"))
             args = kwargs.pop("args")
+            if is_v2:
+                kwargs.pop("field_resolver", None)
+                kwargs["document_ast"] = kwargs.pop("document")
+
             res = wrapped(*args, **kwargs)
             if callable(response_hook):
                 response_hook(span, res)
@@ -51,15 +62,12 @@ def _wrap_execute_args(
     tracer,
     config: Config,
     schema: graphql.GraphQLSchema,
-    document: graphql.DocumentNode,
+    document,
     root_value: Any = None,
     context_value: Any = None,
     variable_values: Optional[Dict[str, Any]] = None,
     operation_name: Optional[str] = None,
-    field_resolver: Optional[graphql.GraphQLFieldResolver] = None,
-    type_resolver: Optional[graphql.GraphQLTypeResolver] = None,
-    middleware: Optional[graphql.Middleware] = None,
-    execution_context_class: Optional[Type[graphql.ExecutionContext]] = None,
+    field_resolver=None,
     *args,
     **kwargs,
 ) -> ProcessedArgs:
@@ -80,9 +88,6 @@ def _wrap_execute_args(
         variable_values,
         operation_name,
         field_resolver,
-        type_resolver,
-        middleware,
-        execution_context_class,
         args,
         kwargs
     )
@@ -95,8 +100,10 @@ def _wrap_execute_args(
         field_resolver = wrap_field_resolver(tracer, config, field_resolver)
 
     if schema:
-        wrap_fields(schema.query_type, tracer, config)
-        wrap_fields(schema.mutation_type, tracer, config)
+        query_type = schema._query if is_v2 else schema.query_type
+        mutation_type = schema._mutation if is_v2 else schema.mutation_type
+        wrap_fields(query_type, tracer, config)
+        wrap_fields(mutation_type, tracer, config)
 
     processed_args = processed_args._replace(field_resolver=field_resolver)
     return processed_args
@@ -111,13 +118,17 @@ def wrap_fields(typ: graphql.GraphQLObjectType, tracer, config: Config) -> None:
 
     setattr(typ, OTEL_PATCHED_ATTR, True)
     for field in typ.fields.values():
-        if field.resolve:
-            field.resolve = wrap_field_resolver(tracer, config, field.resolve)
+        if is_v2:
+            if field.resolver:
+                field.resolver = wrap_field_resolver(tracer, config, field.resolver)
+        else:
+            if field.resolve:
+                field.resolve = wrap_field_resolver(tracer, config, field.resolve)
 
         if field.type:
             unwrapped_type = field.type
-            while isinstance(unwrapped_type, graphql.GraphQLWrappingType):
-                unwrapped_type = field.type.of_type
+            while is_wrapping_type(unwrapped_type):
+                unwrapped_type = unwrapped_type.of_type
 
             wrap_fields(unwrapped_type, tracer, config)
 
@@ -125,7 +136,7 @@ def wrap_fields(typ: graphql.GraphQLObjectType, tracer, config: Config) -> None:
 def wrap_field_resolver(tracer, config: Config, resolver: Callable):
     @wrapt.decorator
     def _wrap_field_resolver(wrapped, _, args, kwargs):
-        def _resolver(root: Any, info: graphql.GraphQLResolveInfo, **args_):
+        def _resolver(root: Any, info, **args_):
             if not _hasattr(info.context, OTEL_GRAPHQL_DATA_ATTR):
                 return wrapped(root, info, **args_)
 

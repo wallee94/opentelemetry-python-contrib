@@ -13,6 +13,7 @@ from opentelemetry.instrumentation.graphql.parse import _wrap_parse
 from opentelemetry.instrumentation.graphql.utils import (
     add_span_source,
     Config,
+    is_v2,
 )
 from opentelemetry.instrumentation.graphql.validate import _wrap_validate
 from opentelemetry.instrumentation.graphql.version import __version__
@@ -52,13 +53,6 @@ class GraphQLInstrumentator(BaseInstrumentor):
         GraphQLInstrumentator._enabled = True
         wrap_object(
             graphql,
-            "execute_sync",
-            FunctionWrapper,
-            args=(_wrap_execute(tracer, config, response_hook=response_hook),),
-            kwargs={"enabled": self.enabled}
-        )
-        wrap_object(
-            graphql.execution,
             "execute",
             FunctionWrapper,
             args=(_wrap_execute(tracer, config, response_hook=response_hook),),
@@ -78,10 +72,19 @@ class GraphQLInstrumentator(BaseInstrumentor):
             args=(_wrap_validate(tracer),),
             kwargs={"enabled": self.enabled}
         )
+        if not is_v2:
+            wrap_object(
+                graphql,
+                "execute_sync",
+                FunctionWrapper,
+                args=(_wrap_execute(tracer, config, response_hook=response_hook),),
+                kwargs={"enabled": self.enabled}
+            )
 
     def _uninstrument(self, **kwargs):
         GraphQLInstrumentator._enabled = False
         unwrap(graphql, "parse")
         unwrap(graphql, "execute")
         unwrap(graphql, "validate")
-        unwrap(graphql, "execute_sync")
+        if not is_v2:
+            unwrap(graphql, "execute_sync")

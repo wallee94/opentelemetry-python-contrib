@@ -5,14 +5,15 @@ from graphql import (
     GraphQLField,
     parse,
 )
-from opentelemetry.test.test_base import TestBase
 from opentelemetry.trace import SpanKind
 
 import opentelemetry.instrumentation.graphql
 from opentelemetry.instrumentation.graphql import GraphQLInstrumentator
+from opentelemetry.instrumentation.graphql.utils import is_v2
+from tests import GraphQLInstrumentationTestBase
 
 
-class TestGraphQLValidateIntegration(TestBase):
+class TestGraphQLValidateIntegration(GraphQLInstrumentationTestBase):
     q = """
         query Q { a }
         mutation M { c }
@@ -77,8 +78,14 @@ class TestGraphQLValidateIntegration(TestBase):
         self.assertEqual(event.attributes["exception.type"], "GraphQLError")
         self.assertEqual(event.attributes["exception.stacktrace"], "NoneType: None\n")
         self.assertEqual(event.attributes["exception.escaped"], "False")
-        self.assertEqual(
-            event.attributes["exception.message"],
-            "Cannot query field 'err' on type 'Q'.\n\nGraphQL request:1:13\n1 "
-            "| query Q { a err }\n  |             ^"
-        )
+        if is_v2:
+            self.assertEqual(
+                event.attributes["exception.message"],
+                'Cannot query field "err" on type "Q".'
+            )
+        else:
+            self.assertEqual(
+                event.attributes["exception.message"],
+                "Cannot query field 'err' on type 'Q'.\n\nGraphQL request:1:13\n1 "
+                "| query Q { a err }\n  |             ^"
+            )

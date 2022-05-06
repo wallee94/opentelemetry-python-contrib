@@ -11,6 +11,13 @@ from opentelemetry.instrumentation.graphql.context import (
 )
 from opentelemetry.instrumentation.graphql.names import AttributeName, SpanName
 
+try:
+    from graphql import OperationDefinitionNode
+except ImportError:
+    from graphql.language.ast import OperationDefinition as OperationDefinitionNode
+
+is_v2 = graphql.__version__[0] == '2'
+
 ProcessedArgs = namedtuple(
     "ProcessedArgs",
     (
@@ -21,9 +28,6 @@ ProcessedArgs = namedtuple(
         "variable_values",
         "operation_name",
         "field_resolver",
-        "type_resolver",
-        "middleware",
-        "execution_context_class",
         "args",
         "kwargs",
     ),
@@ -55,7 +59,7 @@ def _getattr(obj, name):
 def resolver_span(
     tracer: Tracer,
     config: Config,
-    info: graphql.GraphQLResolveInfo,
+    info,
     path: List[str],
     parent_span: Optional[Span],
 ) -> Span:
@@ -75,8 +79,10 @@ def resolver_span(
 
     otel_graphql_data = _getattr(info.context, OTEL_GRAPHQL_DATA_ATTR)
     document = otel_graphql_data.source
-    for field_node in info.field_nodes:
-        if field_node.kind == "field":
+
+    nodes = info.field_asts if is_v2 else info.field_nodes
+    for field_node in nodes:
+        if is_v2 or field_node.kind == "field":
             start = end = None
             if field_node.loc:
                 start, end = field_node.loc.start, field_node.loc.end
@@ -121,7 +127,7 @@ def get_parent_field(context: Any, path: List[str]) -> OTELGraphQLField:
 def create_field_if_not_exists(
     tracer: Tracer,
     config: Config,
-    info: graphql.GraphQLResolveInfo,
+    info,
     path: List[str],
 ) -> Tuple[OTELGraphQLField, bool]:
     """
@@ -143,12 +149,15 @@ def create_field_if_not_exists(
 
 
 def path_to_list(
-    merge_items: bool, path: graphql.pyutils.path.Path
+    merge_items: bool, path
 ) -> List[str]:
     """
     Converts a GraphQL path into a list. If `merge_items` is False, the same field in
     a different element in a list are treated as diff fields with diff spans.
     """
+    if is_v2:
+        return path
+
     flattened = []
     cur = path
     while cur:
@@ -163,8 +172,8 @@ def path_to_list(
 
 
 def get_operation(
-    document: graphql.DocumentNode, operation_name: Optional[str] = None
-) -> Optional[graphql.OperationDefinitionNode]:
+    document, operation_name: Optional[str] = None
+):
     """
     Returns the operation DefinitionNode in `document`. If `operation_name` is
     provided, the operation's name must match
@@ -173,7 +182,7 @@ def get_operation(
         return None
 
     for definition in document.definitions:
-        if isinstance(definition, graphql.OperationDefinitionNode):
+        if isinstance(definition, OperationDefinitionNode):
             if operation_name is None:
                 return definition
             elif definition.name and definition.name.value == operation_name:
@@ -183,15 +192,18 @@ def get_operation(
 
 
 def add_span_source(
-    span: Span, loc: graphql.Location, allow_values: bool, start=None, end=None
+    span: Span, loc, allow_values: bool, start=None, end=None
 ) -> None:
     src = _get_source_from_loc(loc, allow_values, start, end)
     span.set_attribute(AttributeName.SOURCE, src)
 
 
 def _get_source_from_loc(
-    loc: graphql.Location, allow_values, start, end
+    loc, allow_values, start, end
 ) -> str:
+    if is_v2:
+        return loc.source.body[start:end]
+
     src = ""
     if not loc or not loc.start_token:
         return src
@@ -237,7 +249,7 @@ def _get_source_from_loc(
         if nxt:
             nxt = nxt.next
 
-    return src
+    return src.strip()
 
 
 def create_execute_span(tracer, config: Config, processed_args: ProcessedArgs):
@@ -247,7 +259,7 @@ def create_execute_span(tracer, config: Config, processed_args: ProcessedArgs):
     )
     span = tracer.start_span(name=SpanName.EXECUTE)
     if operation:
-        name = operation.operation.name
+        name = operation.operation if is_v2 else operation.operation.name
         if name:
             span.set_attribute(AttributeName.OPERATION, str(name))
 

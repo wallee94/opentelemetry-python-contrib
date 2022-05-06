@@ -1,11 +1,11 @@
-from opentelemetry.test.test_base import TestBase
 from opentelemetry.trace import SpanKind
 
 import opentelemetry.instrumentation.graphql
 from opentelemetry.instrumentation.graphql import GraphQLInstrumentator
+from tests import GraphQLInstrumentationTestBase
 
 
-class TestGraphQLParseIntegration(TestBase):
+class TestGraphQLParseIntegration(GraphQLInstrumentationTestBase):
     q = "query Q { a }"
 
     def setUp(self):
